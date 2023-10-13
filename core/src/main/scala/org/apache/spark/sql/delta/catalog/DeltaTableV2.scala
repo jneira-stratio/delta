@@ -68,9 +68,13 @@ case class DeltaTableV2(
     }
   }
 
+  def getCatalogTableStorageProperties: Map[String, String] =
+    catalogTable.map(_.storage.properties).getOrElse(Map.empty)
+
   // The loading of the DeltaLog is lazy in order to reduce the amount of FileSystem calls,
   // in cases where we will fallback to the V1 behavior.
-  lazy val deltaLog: DeltaLog = DeltaLog.forTable(spark, rootPath)
+  lazy val deltaLog: DeltaLog =
+    DeltaLog.forTable(spark, rootPath, getCatalogTableStorageProperties ++ options.asScala.toMap)
 
   def getTableIdentifierIfExists: Option[TableIdentifier] = tableIdentifier.map(
     spark.sessionState.sqlParser.parseTableIdentifier)

@@ -59,6 +59,7 @@ import org.apache.spark.util.{Clock, SystemClock}
 class DeltaLog private(
     val logPath: Path,
     val dataPath: Path,
+    options: Map[String, String],
     val clock: Clock)
   extends Checkpoints
   with MetadataCleanup
@@ -78,7 +79,7 @@ class DeltaLog private(
   /** Used to read and write physical log files and checkpoints. */
   lazy val store = createLogStore(spark)
   /** Direct access to the underlying storage system. */
-  private[delta] lazy val fs = logPath.getFileSystem(spark.sessionState.newHadoopConf)
+  private[delta] lazy val fs = logPath.getFileSystem(spark.sessionState.newHadoopConfWithOptions(options))
 
   /** Use ReentrantLock to allow us to call `lockInterruptibly` */
   protected val deltaLogLock = new ReentrantLock()
@@ -450,9 +451,29 @@ object DeltaLog extends DeltaLogging {
     }
   }
 
-  // TODO: Don't assume the data path here.
+  /** Helper for creating a log when it stored at the root of the data. */
+  def forTable(spark: SparkSession, dataPath: String, options: Map[String, String]): DeltaLog = {
+    apply(spark, new Path(dataPath, "_delta_log"), options, new SystemClock)
+  }
+
+  /** Helper for creating a log when it stored at the root of the data. */
+  def forTable(spark: SparkSession, dataPath: Path, options: Map[String, String]): DeltaLog = {
+    apply(spark, new Path(dataPath, "_delta_log"), options, new SystemClock)
+  }
+
   def apply(spark: SparkSession, rawPath: Path, clock: Clock = new SystemClock): DeltaLog = {
-    val hadoopConf = spark.sessionState.newHadoopConf()
+    apply(spark, rawPath, Map.empty, clock)
+  }
+
+  // TODO: Don't assume the data path here.
+  def apply(
+      spark: SparkSession,
+      rawPath: Path,
+      options: Map[String, String],
+      clock: Clock
+  ): DeltaLog = {
+    val fileSystemOptions: Map[String, String] = options.filterKeys(_.startsWith("fs."))
+    val hadoopConf = spark.sessionState.newHadoopConfWithOptions(fileSystemOptions)
     val fs = rawPath.getFileSystem(hadoopConf)
     val path = fs.makeQualified(rawPath)
     // The following cases will still create a new ActionLog even if there is a cached
@@ -464,7 +485,7 @@ object DeltaLog extends DeltaLogging {
       deltaLogCache.get(path, () => { recordDeltaOperation(
             null, "delta.log.create", Map(TAG_TAHOE_PATH -> path.getParent.toString)) {
           AnalysisHelper.allowInvokingTransformsInAnalyzer {
-            new DeltaLog(path, path.getParent, clock)
+            new DeltaLog(path, path.getParent, options, clock)
           }
         }
       })
